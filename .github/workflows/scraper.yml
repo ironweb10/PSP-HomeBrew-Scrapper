@@ -1,0 +1,93 @@
+name: Nice scrapper
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+      
+      - name: Launching
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install stuff
+        run: |
+          pip install requests beautifulsoup4 lxml
+      
+      - name: This is a secret
+        env:
+          SCRAPER_SCRIPT: ${{ secrets.SCRAPER_SCRIPT }}
+        run: |
+          echo "$SCRAPER_SCRIPT" > scraper.py
+      
+      - name: Run scraper
+        run: python scraper.py
+      
+      - name: Generate PKGi
+        run: |
+          python - <<'EOF'
+          import json, os, re
+
+          with open('psp_homebrew_library.json', 'r', encoding='utf-8') as f:
+              data = json.load(f)
+
+          CATEGORY_MAP = {
+              'Games':        (1, 'pkgi_games.txt'),
+              'DLC':          (2, 'pkgi_dlcs.txt'),
+              'Themes':       (3, 'pkgi_themes.txt'),
+              'Theme':        (3, 'pkgi_themes.txt'),
+              'PSX':          (4, 'pkgi_psx.txt'),
+              'Demos':        (5, 'pkgi_demos.txt'),
+              'Demo':         (5, 'pkgi_demos.txt'),
+              'Updates':      (6, 'pkgi_updates.txt'),
+              'Emulators':    (7, 'pkgi_emulators.txt'),
+              'Emulator':     (7, 'pkgi_emulators.txt'),
+              'Applications': (8, 'pkgi_apps.txt'),
+              'Utilities':    (8, 'pkgi_apps.txt'),
+              'Plugins':      (8, 'pkgi_apps.txt'),
+              'Unknown':      (0, 'pkgi.txt'),
+          }
+
+          os.makedirs('pkgi_db', exist_ok=True)
+
+          db_files = {}
+
+          def sanitize(text):
+              return re.sub(r'[\r\n,]+', ' ', str(text or '')).strip()
+
+          for item in data.get('items', []):
+              category  = item.get('category', 'Unknown')
+              type_num, filename = CATEGORY_MAP.get(category, (0, 'pkgi.txt'))
+
+              content_id  = sanitize(item.get('identifier', ''))
+              name        = sanitize(item.get('title') or item.get('identifier', ''))
+              description = sanitize(', '.join(item.get('tags', [])) or category)
+              url         = item.get('download_url', '') or ''
+              size        = '0'
+              rap         = ''
+              checksum    = ''
+
+              line = f"{content_id},{type_num},{name},{description},{rap},{url},{size},{checksum}"
+              db_files.setdefault(filename, []).append(line)
+
+          for filename, lines in db_files.items():
+              path = os.path.join('pkgi_db', filename)
+              with open(path, 'w', encoding='utf-8') as f:
+                  f.write('\n'.join(lines) + '\n')
+          EOF
+      
+      - name: Finish
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add psp_homebrew_library.json pkgi_db/
+          git diff --quiet && git diff --staged --quiet || \
+            git commit -m "Updated!"
+          git push
